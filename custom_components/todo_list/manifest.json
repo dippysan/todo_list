@@ -1,0 +1,13 @@
+{
+  "domain": "todo_list",
+  "name": "Todo List",
+  "documentation": "",
+  "dependencies": [
+    "frontend"
+  ],
+  "codeowners": [],
+  "requirements": [],
+  "config_flow": true,
+  "version": "1.0.0",
+  "iot_class": "local_push"
+}
