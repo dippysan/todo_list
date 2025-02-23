@@ -11,5 +11,7 @@ logger:
   logs:
     custom_components.todo_list: debug
 
-# debugpy:
-#   wait: true
+debugpy:
+  start: true
+  wait: true
+  port: 5678

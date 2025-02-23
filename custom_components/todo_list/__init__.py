@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import voluptuous as vol
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
@@ -44,12 +45,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entity_id = entry.data[CONF_ENTITY_ID]
 
         # Get all items
-        items_response = await hass.services.async_call(
-            "todo",
-            "get_items",
-            {"entity_id": entity_id},
-            blocking=True,
-            return_response=True,
+        items_response = cast(
+            dict[str, dict[str, list[dict[str, Any]]]],
+            await hass.services.async_call(
+                "todo",
+                "get_items",
+                {"entity_id": entity_id},
+                blocking=True,
+                return_response=True,
+            ),
         )
 
         if not items_response or entity_id not in items_response:
@@ -109,22 +113,19 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
     _LOGGER.debug("Setting up Todo List integration")
 
     try:
-        # Register frontend resources
-        await hass.components.frontend.async_register_built_in_panel(
-            "lovelace",
-            "dashboards",
-            sidebar_title="Dashboards",
-            sidebar_icon="mdi:view-dashboard",
+        # Register frontend path
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    url_path="/todo_list",
+                    path=hass.config.path("custom_components/todo_list/frontend"),
+                    cache_headers=False,
+                )
+            ]
         )
 
-        # Register the card
-        hass.components.frontend.async_register_module(
-            "todo-reset-card",
-            "/local/custom_components/todo_list/frontend/todo-reset-card.js",
-        )
-        _LOGGER.debug("Registered card module")
-
+        _LOGGER.debug("Registered static path")
         return True
-    except (FileNotFoundError, ValueError, ImportError) as e:
+    except Exception as e:
         _LOGGER.exception("Error setting up Todo List integration: %s", str(e))
         return False

@@ -23,7 +23,7 @@ if (customElements.get("todo-reset-card")) {
         const result = await this._hass.callWS({
           type: "todo/item/list",
           entity_id: this._config.entity,
-        });-
+        });
         console.log("Fetched items:", result);
         return result?.items || [];
       } catch (error) {
