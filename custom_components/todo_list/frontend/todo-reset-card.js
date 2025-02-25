@@ -1,6 +1,94 @@
 if (customElements.get("todo-reset-card")) {
   console.info("todo-reset-card already defined");
 } else {
+  class TodoResetCardEditor extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: 'open' });
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+      this._render();
+    }
+
+    setConfig(config) {
+      this.config = config;
+      this._render();
+    }
+
+    configChanged(newConfig) {
+      const event = new CustomEvent("config-changed", {
+        detail: { config: newConfig },
+        bubbles: true,
+        composed: true,
+      });
+      this.dispatchEvent(event);
+    }
+
+    _render() {
+      if (!this.config || !this._hass) return;
+
+      // Clear the shadow root
+      while (this.shadowRoot.firstChild) {
+        this.shadowRoot.removeChild(this.shadowRoot.firstChild);
+      }
+
+      // Define the schema for ha-form
+      const schema = [
+        {
+          name: "entity",
+          selector: {
+            entity: {
+              domain: "todo_list",
+              label: "Todo List Entity",
+            },
+          },
+        },
+      ];
+
+      // Create style element
+      const style = document.createElement('style');
+      style.textContent = `
+        .card-config {
+          padding: 16px;
+        }
+      `;
+      this.shadowRoot.appendChild(style);
+
+      // Create container
+      const container = document.createElement('div');
+      container.className = 'card-config';
+
+      // Create ha-form
+      const haForm = document.createElement('ha-form');
+      haForm.hass = this._hass;
+      haForm.data = this.config;
+      haForm.schema = schema;
+      haForm.computeLabel = (schema) => schema.selector?.entity?.label || schema.selector?.text?.label || schema.name;
+      haForm.addEventListener('value-changed', this._valueChanged.bind(this));
+
+      // Append elements
+      container.appendChild(haForm);
+      this.shadowRoot.appendChild(container);
+    }
+
+    _valueChanged(ev) {
+      if (!this.config || !this._hass) return;
+
+      const newConfig = { ...this.config };
+      if (ev.detail.value === undefined) {
+        delete newConfig[ev.target.key];
+      } else {
+        newConfig[ev.target.key] = ev.detail.value;
+      }
+
+      this.configChanged(newConfig);
+    }
+  }
+
+  customElements.define("todo-reset-card-editor", TodoResetCardEditor);
+
   class TodoResetCard extends HTMLElement {
     constructor() {
       super();
@@ -11,8 +99,19 @@ if (customElements.get("todo-reset-card")) {
       this.attachShadow({ mode: "open" });
     }
 
+    static getConfigElement() {
+      return document.createElement("todo-reset-card-editor");
+    }
+
+    static getStubConfig() {
+      return {
+        entity: ""
+      };
+    }
+
     set hass(hass) {
       this._hass = hass;
+      console.log("Hass object:", this._hass);
       this.updateCard();
     }
 
@@ -104,14 +203,11 @@ if (customElements.get("todo-reset-card")) {
         this.shadowRoot.appendChild(card);
       }
 
-      // Update the title every time
       const todoEntity = this._hass.states[this._config.entity];
-      console.log("friendly_name", todoEntity?.attributes?.friendly_name);
       const header = this.shadowRoot.querySelector(".card-header");
       if (header) {
         const title =
           todoEntity?.attributes?.friendly_name ||
-          this._config.title ||
           "Todo List";
         header.textContent = title;
       }
@@ -188,10 +284,7 @@ if (customElements.get("todo-reset-card")) {
     }
 
     setConfig(config) {
-      this._config = {
-        title: "Todo List",
-        ...config,
-      };
+      this._config = config;
       this.updateCard();
     }
 
@@ -211,7 +304,7 @@ if (customElements.get("todo-reset-card")) {
       type: "todo-reset-card",
       name: "Todo Reset Card",
       description: "A custom todo list card with auto-reset functionality",
-      preview: false,
+      preview: true,
     });
   })();
 }

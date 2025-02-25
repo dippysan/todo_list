@@ -13,5 +13,5 @@ logger:
 
 debugpy:
   start: true
-  wait: true
+  wait: false
   port: 5678
