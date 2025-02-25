@@ -152,19 +152,28 @@ if (customElements.get("todo-reset-card")) {
 
     set hass(hass) {
       this._hass = hass;
-      console.log("Hass object:", this._hass);
       this.updateCard();
     }
 
     async fetchItems() {
-      if (!this._hass || !this._config.entity) return [];
+      if (!this._hass || !this._config || !this._config.entity) {
+        return [];
+      }
+
+      // Get the source entity ID from our entity's attributes
+      const resetEntity = this._hass.states[this._config.entity];
+      if (!resetEntity || !resetEntity.attributes.source_entity_id) {
+        console.error("Source entity not found in attributes");
+        return [];
+      }
+
+      const sourceEntityId = resetEntity.attributes.source_entity_id;
 
       try {
         const result = await this._hass.callWS({
           type: "todo/item/list",
-          entity_id: this._config.entity,
-        });-
-        console.log("Fetched items:", result);
+          entity_id: sourceEntityId,
+        });
         return result?.items || [];
       } catch (error) {
         console.error("Error fetching todo items:", error);
@@ -228,6 +237,12 @@ if (customElements.get("todo-reset-card")) {
             padding: 8px 16px;
             font-style: italic;
           }
+
+          .card-actions {
+            padding: 8px 16px;
+            display: flex;
+            justify-content: flex-end;
+          }
         `;
 
         // Create the card content
@@ -237,36 +252,22 @@ if (customElements.get("todo-reset-card")) {
           <div class="card-content">
             <div class="todo-list"></div>
           </div>
+          <div class="card-actions">
+            <mwc-button>Reset All Items</mwc-button>
+          </div>
         `;
 
         // Add style and content to shadow root
         this.shadowRoot.appendChild(style);
         this.shadowRoot.appendChild(card);
+
+        // Add event listener for reset button
+        this.shadowRoot.querySelector('mwc-button').addEventListener('click', this._handleReset.bind(this));
       }
 
-      const todoEntity = this._hass.states[this._config.entity];
-      const header = this.shadowRoot.querySelector(".card-header");
-      if (header) {
-        const title =
-          todoEntity?.attributes?.friendly_name ||
-          "Todo List";
-        header.textContent = title;
-      }
-
-      const todoList = this.shadowRoot.querySelector(".todo-list");
-      if (!todoList) return;
-
-      if (!this._config.entity) {
-        todoList.innerHTML = `
-          <div class="error">
-            Please specify a todo entity in the card configuration
-          </div>
-        `;
-        return;
-      }
-
-      if (!todoEntity) {
-        todoList.innerHTML = `
+      const resetEntity = this._hass.states[this._config.entity];
+      if (!resetEntity) {
+        this.shadowRoot.querySelector(".todo-list").innerHTML = `
           <div class="error">
             Entity ${this._config.entity} not found
           </div>
@@ -274,8 +275,35 @@ if (customElements.get("todo-reset-card")) {
         return;
       }
 
+      // Get the source entity ID
+      const sourceEntityId = resetEntity.attributes.source_entity_id;
+      if (!sourceEntityId) {
+        this.shadowRoot.querySelector(".todo-list").innerHTML = `
+          <div class="error">
+            Source entity not defined in ${this._config.entity}
+          </div>
+        `;
+        return;
+      }
+
+      // Update header
+      const header = this.shadowRoot.querySelector(".card-header");
+      if (header) {
+        // Get the source entity
+        const sourceEntity = this._hass.states[sourceEntityId];
+
+        // Use the source entity's friendly name if available
+        if (sourceEntity && sourceEntity.attributes.friendly_name) {
+          header.textContent = sourceEntity.attributes.friendly_name;
+        } else {
+          // Fall back to the source entity ID without the domain
+          header.textContent = sourceEntityId.split('.')[1].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+      }
+
       // Fetch items
       const items = await this.fetchItems();
+      const todoList = this.shadowRoot.querySelector(".todo-list");
 
       if (!items.length) {
         todoList.innerHTML = `
@@ -313,7 +341,7 @@ if (customElements.get("todo-reset-card")) {
             item.status === "completed" ? "needs_action" : "completed";
 
           await this._hass.callService("todo", "update_item", {
-            entity_id: this._config.entity,
+            entity_id: sourceEntityId,
             item: itemId,
             status: newStatus,
           });
@@ -322,6 +350,15 @@ if (customElements.get("todo-reset-card")) {
           this.updateCard();
         };
       });
+    }
+
+    _handleReset() {
+      if (!this._hass || !this._config || !this._config.entity) return;
+
+      this._hass.callService("todo_list", "reset_now", {});
+
+      // Refresh the card after a short delay
+      setTimeout(() => this.updateCard(), 1000);
     }
 
     setConfig(config) {
@@ -334,94 +371,12 @@ if (customElements.get("todo-reset-card")) {
       }
 
       this._config = config;
+      this._initialized = false;
       this.updateCard();
     }
 
     getCardSize() {
       return 3;
-    }
-
-    _render() {
-      if (!this._config || !this._hass) return;
-
-      // Get the entity state
-      const entityId = this._config.entity;
-      const state = this._hass.states[entityId];
-
-      if (!state) {
-        this.innerHTML = `<ha-card><div class="card-content">Entity ${entityId} not found</div></ha-card>`;
-        return;
-      }
-
-      // Get attributes
-      const sourceEntityId = state.attributes.source_entity_id;
-      const resetTime = state.attributes.reset_time;
-
-      // Get source entity state
-      const sourceState = this._hass.states[sourceEntityId];
-
-      // Create card content
-      this.innerHTML = `
-        <ha-card>
-          <div class="card-header">
-            <div class="name">${state.attributes.friendly_name || entityId}</div>
-          </div>
-          <div class="card-content">
-            <div>Status: ${state.state}</div>
-            <div>Source: ${sourceState?.attributes?.friendly_name || sourceEntityId}</div>
-            <div>Reset Time: ${resetTime}</div>
-            ${this._renderItems()}
-          </div>
-          <div class="card-actions">
-            <mwc-button @click="${this._handleReset}">Reset All Items</mwc-button>
-          </div>
-        </ha-card>
-      `;
-
-      // Add event listener for reset button
-      this.querySelector('mwc-button').addEventListener('click', this._handleReset.bind(this));
-    }
-
-    _renderItems() {
-      const sourceEntityId = this._hass.states[this._config.entity]?.attributes.source_entity_id;
-      if (!sourceEntityId || !this._hass.states[sourceEntityId]) {
-        return '<div>Source entity not available</div>';
-      }
-
-      // Get items from the source entity
-      const items = this._hass.states[sourceEntityId].attributes.items || [];
-
-      if (items.length === 0) {
-        return '<div>No items</div>';
-      }
-
-      return `
-        <div class="todo-items">
-          ${items.map(item => `
-            <div class="todo-item">
-              <ha-checkbox
-                ?checked="${item.status === 'completed'}"
-                @change="${(e) => this._toggleItem(item.uid, e.target.checked)}"
-              ></ha-checkbox>
-              <span class="${item.status === 'completed' ? 'completed' : ''}">${item.summary}</span>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    _handleReset() {
-      this._hass.callService("todo_list", "reset_now", {});
-    }
-
-    _toggleItem(itemId, checked) {
-      const newStatus = checked ? "completed" : "needs_action";
-
-      this._hass.callService("todo", "update_item", {
-        entity_id: this._hass.states[this._config.entity]?.attributes.source_entity_id,
-        item: itemId,
-        status: newStatus,
-      });
     }
   }
 
