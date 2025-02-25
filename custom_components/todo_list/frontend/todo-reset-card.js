@@ -1,3 +1,7 @@
+// Define a constant for the card type
+const CARD_TYPE_RAW = "todo-reset-card";
+const CARD_TYPE = "custom:"+CARD_TYPE_RAW;
+
 if (customElements.get("todo-reset-card")) {
   console.info("todo-reset-card already defined");
 } else {
@@ -13,13 +17,27 @@ if (customElements.get("todo-reset-card")) {
     }
 
     setConfig(config) {
-      this.config = config;
+      this.config = config || {};
       this._render();
     }
 
     configChanged(newConfig) {
+      console.log("Config changed called with:", newConfig);
+      if (!newConfig.entity) {
+        console.error("No entity provided in new config");
+        return;
+      }
+
+      // Ensure we're only sending the entity property and type
+      const cleanConfig = {
+        type: CARD_TYPE,  // Use the constant
+        entity: newConfig.entity
+      };
+
+      console.log("Dispatching clean config:", cleanConfig);
+
       const event = new CustomEvent("config-changed", {
-        detail: { config: newConfig },
+        detail: { config: cleanConfig },
         bubbles: true,
         composed: true,
       });
@@ -27,7 +45,7 @@ if (customElements.get("todo-reset-card")) {
     }
 
     _render() {
-      if (!this.config || !this._hass) return;
+      if (!this._hass) return;
 
       // Clear the shadow root
       while (this.shadowRoot.firstChild) {
@@ -38,10 +56,12 @@ if (customElements.get("todo-reset-card")) {
       const schema = [
         {
           name: "entity",
+          required: true,
           selector: {
             entity: {
               domain: "todo_list",
               label: "Todo List Entity",
+              multiple: false,
             },
           },
         },
@@ -74,15 +94,36 @@ if (customElements.get("todo-reset-card")) {
     }
 
     _valueChanged(ev) {
-      if (!this.config || !this._hass) return;
+      if (!this._hass) return;
 
-      const newConfig = { ...this.config };
-      if (ev.detail.value === undefined) {
-        delete newConfig[ev.target.key];
+      console.log("Value changed event:", ev);
+      console.log("Current config:", this.config);
+
+      // Create a new config object
+      let newConfig = {};
+
+      // Check if we have a nested configuration
+      if (ev.detail.value && typeof ev.detail.value === 'object' && ev.detail.value.entity) {
+        // This is the case where we get a complete config object
+        console.log("Received complete config object:", ev.detail.value);
+        newConfig = {
+          type: CARD_TYPE,  // Use the constant
+          entity: ev.detail.value.entity
+        };
+      } else if (ev.detail.name === "entity") {
+        // This is the case where we get a single property
+        newConfig = {
+          type: CARD_TYPE,  // Use the constant
+          entity: ev.detail.value
+        };
       } else {
-        newConfig[ev.target.key] = ev.detail.value;
+        console.error("Unexpected event structure:", ev);
+        return;
       }
 
+      console.log("New config to be dispatched:", newConfig);
+
+      // Notify about the config change
       this.configChanged(newConfig);
     }
   }
@@ -284,12 +325,103 @@ if (customElements.get("todo-reset-card")) {
     }
 
     setConfig(config) {
+      if (!config) {
+        throw new Error("Invalid configuration");
+      }
+
+      if (!config.entity) {
+        throw new Error("You need to define an entity");
+      }
+
       this._config = config;
       this.updateCard();
     }
 
     getCardSize() {
       return 3;
+    }
+
+    _render() {
+      if (!this._config || !this._hass) return;
+
+      // Get the entity state
+      const entityId = this._config.entity;
+      const state = this._hass.states[entityId];
+
+      if (!state) {
+        this.innerHTML = `<ha-card><div class="card-content">Entity ${entityId} not found</div></ha-card>`;
+        return;
+      }
+
+      // Get attributes
+      const sourceEntityId = state.attributes.source_entity_id;
+      const resetTime = state.attributes.reset_time;
+
+      // Get source entity state
+      const sourceState = this._hass.states[sourceEntityId];
+
+      // Create card content
+      this.innerHTML = `
+        <ha-card>
+          <div class="card-header">
+            <div class="name">${state.attributes.friendly_name || entityId}</div>
+          </div>
+          <div class="card-content">
+            <div>Status: ${state.state}</div>
+            <div>Source: ${sourceState?.attributes?.friendly_name || sourceEntityId}</div>
+            <div>Reset Time: ${resetTime}</div>
+            ${this._renderItems()}
+          </div>
+          <div class="card-actions">
+            <mwc-button @click="${this._handleReset}">Reset All Items</mwc-button>
+          </div>
+        </ha-card>
+      `;
+
+      // Add event listener for reset button
+      this.querySelector('mwc-button').addEventListener('click', this._handleReset.bind(this));
+    }
+
+    _renderItems() {
+      const sourceEntityId = this._hass.states[this._config.entity]?.attributes.source_entity_id;
+      if (!sourceEntityId || !this._hass.states[sourceEntityId]) {
+        return '<div>Source entity not available</div>';
+      }
+
+      // Get items from the source entity
+      const items = this._hass.states[sourceEntityId].attributes.items || [];
+
+      if (items.length === 0) {
+        return '<div>No items</div>';
+      }
+
+      return `
+        <div class="todo-items">
+          ${items.map(item => `
+            <div class="todo-item">
+              <ha-checkbox
+                ?checked="${item.status === 'completed'}"
+                @change="${(e) => this._toggleItem(item.uid, e.target.checked)}"
+              ></ha-checkbox>
+              <span class="${item.status === 'completed' ? 'completed' : ''}">${item.summary}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    _handleReset() {
+      this._hass.callService("todo_list", "reset_now", {});
+    }
+
+    _toggleItem(itemId, checked) {
+      const newStatus = checked ? "completed" : "needs_action";
+
+      this._hass.callService("todo", "update_item", {
+        entity_id: this._hass.states[this._config.entity]?.attributes.source_entity_id,
+        item: itemId,
+        status: newStatus,
+      });
     }
   }
 
@@ -301,7 +433,7 @@ if (customElements.get("todo-reset-card")) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     window.customCards.push({
-      type: "todo-reset-card",
+      type: CARD_TYPE_RAW,
       name: "Todo Reset Card",
       description: "A custom todo list card with auto-reset functionality",
       preview: true,
