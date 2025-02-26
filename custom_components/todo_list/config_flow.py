@@ -12,7 +12,15 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.components import persistent_notification
 import logging
 
-from .const import CONF_TIME, DEFAULT_TIME, DOMAIN
+from .const import (
+    CONF_TIME,
+    DEFAULT_TIME,
+    DOMAIN,
+    CONF_DISPLAY_POSITION,
+    CONF_DISPLAY_HOURS,
+    DEFAULT_DISPLAY_POSITION,
+    DEFAULT_DISPLAY_HOURS,
+)
 
 
 class TodoResetConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -52,6 +60,27 @@ class TodoResetConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         vol.Required(
                             CONF_TIME, default=DEFAULT_TIME
                         ): selector.TimeSelector(),
+                        vol.Required(
+                            CONF_DISPLAY_POSITION, default=DEFAULT_DISPLAY_POSITION
+                        ): selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=[
+                                    {"label": "Before Reset Time", "value": "before"},
+                                    {"label": "After Reset Time", "value": "after"},
+                                ],
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
+                        vol.Required(
+                            CONF_DISPLAY_HOURS, default=DEFAULT_DISPLAY_HOURS
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=1,
+                                max=24,
+                                step=1,
+                                mode=selector.NumberSelectorMode.BOX,
+                            )
+                        ),
                     }
                 ),
                 errors=errors,
@@ -114,6 +143,8 @@ class TodoResetOptionsFlow(config_entries.OptionsFlow):
                             entity.update_settings(
                                 entity_id=user_input[CONF_ENTITY_ID],
                                 reset_time=user_input[CONF_TIME],
+                                display_position=user_input[CONF_DISPLAY_POSITION],
+                                display_hours=user_input[CONF_DISPLAY_HOURS],
                             )
 
                             # Also update the stored data
@@ -121,6 +152,10 @@ class TodoResetOptionsFlow(config_entries.OptionsFlow):
                                 {
                                     "entity_id": user_input[CONF_ENTITY_ID],
                                     "reset_time": user_input[CONF_TIME],
+                                    "display_position": user_input[
+                                        CONF_DISPLAY_POSITION
+                                    ],
+                                    "display_hours": user_input[CONF_DISPLAY_HOURS],
                                 }
                             )
 
@@ -137,6 +172,12 @@ class TodoResetOptionsFlow(config_entries.OptionsFlow):
         # Prepare default values from current configuration
         default_entity_id = self.entry_data.get(CONF_ENTITY_ID, "")
         default_time = self.entry_data.get(CONF_TIME, DEFAULT_TIME)
+        default_display_position = self.entry_data.get(
+            CONF_DISPLAY_POSITION, DEFAULT_DISPLAY_POSITION
+        )
+        default_display_hours = self.entry_data.get(
+            CONF_DISPLAY_HOURS, DEFAULT_DISPLAY_HOURS
+        )
 
         return cast(
             FlowResult,
@@ -152,6 +193,27 @@ class TodoResetOptionsFlow(config_entries.OptionsFlow):
                         vol.Required(
                             CONF_TIME, default=default_time
                         ): selector.TimeSelector(),
+                        vol.Required(
+                            CONF_DISPLAY_POSITION, default=default_display_position
+                        ): selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=[
+                                    {"label": "Before Reset Time", "value": "before"},
+                                    {"label": "After Reset Time", "value": "after"},
+                                ],
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
+                        vol.Required(
+                            CONF_DISPLAY_HOURS, default=default_display_hours
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=1,
+                                max=24,
+                                step=1,
+                                mode=selector.NumberSelectorMode.BOX,
+                            )
+                        ),
                     }
                 ),
                 errors=errors,

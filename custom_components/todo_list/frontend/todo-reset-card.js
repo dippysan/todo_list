@@ -2,6 +2,7 @@
 const CARD_TYPE_RAW = "todo-reset-card";
 const CARD_TYPE = "custom:" + CARD_TYPE_RAW;
 const DEFAULT_REFRESH_DELAY = 1000;
+const DEBUG = false; // Set to true to enable debug logging
 const CSS_CLASSES = {
   DONE: "done",
   ERROR: "error",
@@ -10,6 +11,13 @@ const CSS_CLASSES = {
   CARD_HEADER: "card-header",
   CARD_CONTENT: "card-content",
   CARD_ACTIONS: "card-actions"
+};
+
+// Helper function for conditional logging
+const debugLog = (...args) => {
+  if (DEBUG) {
+    console.log(...args);
+  }
 };
 
 if (customElements.get("todo-reset-card")) {
@@ -173,6 +181,7 @@ if (customElements.get("todo-reset-card")) {
       this._initialized = false;
       this._items = [];
       this._boundHandleReset = this._handleReset.bind(this);
+      this._boundRefreshVisibility = this._refreshVisibility.bind(this);
       this.attachShadow({ mode: "open" });
     }
 
@@ -187,32 +196,82 @@ if (customElements.get("todo-reset-card")) {
     }
 
     set hass(hass) {
+      const oldHass = this._hass;
       this._hass = hass;
+
+      // If this is the first time we're getting hass, subscribe to events
+      if (!oldHass && hass) {
+        this._subscribeToEvents();
+      }
+
       this.updateCard();
+    }
+
+    _checkTimeBasedVisibility() {
+      // Only check visibility once per minute to avoid excessive updates
+      const now = Date.now();
+      if (now - this._lastVisibilityCheck < 60000) { // 60000ms = 1 minute
+        return;
+      }
+
+      this._lastVisibilityCheck = now;
+      console.log("Time-based visibility check triggered");
+
+      if (this._hass && this._config && this._config.entity) {
+        const resetEntity = this._hass.states[this._config.entity];
+        if (resetEntity) {
+          // Check if visibility should change
+          const shouldShow = this._shouldShowCard(resetEntity);
+
+          // Update visibility if needed
+          if (shouldShow && this.style.display === 'none') {
+            console.log("Time check: Showing card");
+            this.style.display = 'block';
+          } else if (!shouldShow && this.style.display !== 'none') {
+            console.log("Time check: Hiding card");
+            this.style.display = 'none';
+          }
+        }
+      }
     }
 
     async fetchItems() {
       if (!this._hass || !this._config || !this._config.entity) {
+        console.error("Missing hass or config for fetchItems");
         return [];
       }
 
       // Get the source entity ID from our entity's attributes
       const resetEntity = this._hass.states[this._config.entity];
-      if (!resetEntity || !resetEntity.attributes.source_entity_id) {
-        console.error("Source entity not found in attributes");
+      if (!resetEntity) {
+        console.error(`Entity ${this._config.entity} not found`);
+        return [];
+      }
+
+      if (!resetEntity.attributes || !resetEntity.attributes.source_entity_id) {
+        console.error(`Source entity ID not found in attributes for ${this._config.entity}`);
+        console.log("Available attributes:", resetEntity.attributes);
         return [];
       }
 
       const sourceEntityId = resetEntity.attributes.source_entity_id;
+      console.log(`Fetching items for source entity: ${sourceEntityId}`);
 
       try {
         const result = await this._hass.callWS({
           type: "todo/item/list",
           entity_id: sourceEntityId,
         });
-        return result?.items || [];
+
+        if (!result || !result.items) {
+          console.error("No items returned from todo/item/list call");
+          return [];
+        }
+
+        console.log(`Retrieved ${result.items.length} items from ${sourceEntityId}`);
+        return result.items;
       } catch (error) {
-        console.error("Error fetching todo items:", error);
+        console.error(`Error fetching todo items for ${sourceEntityId}:`, error);
         return [];
       }
     }
@@ -230,10 +289,37 @@ if (customElements.get("todo-reset-card")) {
         return this._showError(`Entity ${this._config.entity} not found`);
       }
 
+      // Debug the entity state and attributes
+      console.log("Reset entity state:", resetEntity.state);
+      console.log("Reset entity attributes:", resetEntity.attributes);
+
+      // Handle unavailable entity state
+      if (resetEntity.state === "unavailable") {
+        return this._showError(`Entity ${this._config.entity} is currently unavailable. This may be because Home Assistant is still starting up or the entity has an error.`);
+      }
+
+      // Check if the card should be visible based on time settings
+      if (!this._shouldShowCard(resetEntity)) {
+        this.style.display = 'none';
+        return;
+      } else {
+        this.style.display = 'block';
+      }
+
       // Get the source entity ID
       const sourceEntityId = this._getSourceEntityId();
       if (!sourceEntityId) {
-        return this._showError(`Source entity not defined in ${this._config.entity}`);
+        // More detailed error message
+        const attrs = resetEntity.attributes ?
+          `Available attributes: ${Object.keys(resetEntity.attributes).join(', ')}` :
+          'No attributes found';
+
+        // Special message for restored entities
+        if (resetEntity.attributes.restored) {
+          return this._showError(`Entity ${this._config.entity} has been restored but not fully initialized. Please check your configuration or restart Home Assistant.`);
+        }
+
+        return this._showError(`Source entity not defined in ${this._config.entity}. ${attrs}`);
       }
 
       // Update header
@@ -246,6 +332,60 @@ if (customElements.get("todo-reset-card")) {
       } catch (error) {
         console.error("Error updating todo list:", error);
         this._showError(`Error loading items: ${error.message}`);
+      }
+    }
+
+    _shouldShowCard(resetEntity) {
+      // Get display settings from entity attributes
+      const displayPosition = resetEntity.attributes.display_position || 'before';
+      const displayHours = parseInt(resetEntity.attributes.display_hours) || 2;
+      const resetTime = resetEntity.attributes.reset_time || '00:00:00';
+
+      // Parse reset time
+      const [resetHour, resetMinute, resetSecond] = resetTime.split(':').map(Number);
+
+      // Get current time
+      const now = new Date();
+
+      // Create Date objects for comparison
+      const resetDate = new Date();
+      resetDate.setHours(resetHour, resetMinute, resetSecond, 0);
+
+      // Calculate time difference in hours (precise)
+      const diffMs = Math.abs(now - resetDate);
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      // Determine if we should show the card based on position and hours
+      if (displayPosition === 'before') {
+        if (now < resetDate) {
+          // We're before the reset time today
+          return diffHours <= displayHours;
+        } else {
+          // We're after the reset time, check against tomorrow's reset
+          const tomorrowResetDate = new Date(resetDate);
+          tomorrowResetDate.setDate(tomorrowResetDate.getDate() + 1);
+
+          const diffToTomorrowMs = tomorrowResetDate - now;
+          const hoursUntilTomorrow = diffToTomorrowMs / (1000 * 60 * 60);
+          const hoursInDay = 24;
+
+          // We should NOT show if we're within displayHours of tomorrow's reset
+          return hoursUntilTomorrow >= (hoursInDay - displayHours);
+        }
+      } else { // 'after'
+        if (now >= resetDate) {
+          // We're after the reset time today
+          return diffHours <= displayHours;
+        } else {
+          // We're before the reset time, check against yesterday's reset
+          const yesterdayResetDate = new Date(resetDate);
+          yesterdayResetDate.setDate(yesterdayResetDate.getDate() - 1);
+
+          const diffFromYesterdayMs = now - yesterdayResetDate;
+          const hoursSinceYesterday = diffFromYesterdayMs / (1000 * 60 * 60);
+
+          return hoursSinceYesterday <= displayHours;
+        }
       }
     }
 
@@ -329,6 +469,7 @@ if (customElements.get("todo-reset-card")) {
       }
 
       this._config = config;
+
       this._initialized = false;
       this.updateCard();
     }
@@ -341,7 +482,15 @@ if (customElements.get("todo-reset-card")) {
       if (!this._hass || !this._config?.entity) return null;
 
       const resetEntity = this._hass.states[this._config.entity];
-      return resetEntity?.attributes?.source_entity_id || null;
+      if (!resetEntity) return null;
+
+      // Check if source_entity_id exists in attributes
+      if (!resetEntity.attributes.source_entity_id) {
+        console.error(`Source entity ID not found in attributes for ${this._config.entity}`);
+        return null;
+      }
+
+      return resetEntity.attributes.source_entity_id;
     }
 
     _getEntityName(entityId) {
@@ -453,6 +602,13 @@ if (customElements.get("todo-reset-card")) {
       }
     }
 
+    connectedCallback() {
+      // Subscribe to Home Assistant events when the card is connected
+      if (this._hass) {
+        this._subscribeToEvents();
+      }
+    }
+
     disconnectedCallback() {
       // Remove event listeners
       const resetButton = this.shadowRoot.querySelector('mwc-button');
@@ -465,6 +621,45 @@ if (customElements.get("todo-reset-card")) {
       todoItems.forEach(item => {
         item.onclick = null;
       });
+
+      // Unsubscribe from events
+      this._unsubscribeFromEvents();
+    }
+
+    _subscribeToEvents() {
+      if (!this._hass || this._eventSubscribed) return;
+
+      // Subscribe to the state_changed event
+      this._hass.connection.subscribeEvents(
+        (event) => {
+          // Check if this is a time entity change
+          if (event.data &&
+              event.data.entity_id === 'sensor.time' &&
+              event.data.new_state &&
+              event.data.old_state &&
+              event.data.new_state.state !== event.data.old_state.state) {
+
+            this._refreshVisibility();
+          }
+        },
+        "state_changed"
+      ).then(unsub => {
+        this._eventUnsub = unsub;
+        this._eventSubscribed = true;
+
+        // Do an immediate visibility check
+        setTimeout(() => this._refreshVisibility(), 1000);
+      }).catch(err => {
+        console.error("Failed to subscribe to state_changed events:", err);
+      });
+    }
+
+    _unsubscribeFromEvents() {
+      if (this._eventUnsub) {
+        this._eventUnsub();
+        this._eventUnsub = null;
+        this._eventSubscribed = false;
+      }
     }
 
     _renderItems(items) {
@@ -493,6 +688,36 @@ if (customElements.get("todo-reset-card")) {
           ${item.summary}
         </div>
       `;
+    }
+
+    // Clean up _refreshVisibility
+    _refreshVisibility() {
+      if (this._hass && this._config && this._config.entity) {
+        const resetEntity = this._hass.states[this._config.entity];
+        if (resetEntity) {
+          // Check if visibility should change
+          const shouldShow = this._shouldShowCard(resetEntity);
+
+          // Update visibility if needed
+          if (shouldShow && this.style.display === 'none') {
+            this.style.display = 'block';
+            this.updateCard(); // Full update when becoming visible
+          } else if (!shouldShow && this.style.display !== 'none') {
+            this.style.display = 'none';
+          }
+        }
+      }
+    }
+
+    // This is the key method that tells Home Assistant what entities this card depends on
+    get _timeEntity() {
+      // Use the time entity if available, otherwise null
+      return this._hass ? this._hass.states['sensor.time'] : null;
+    }
+
+    // Tell Home Assistant what entities this card depends on
+    getEntities() {
+      return this._dependencies || [];
     }
   }
 

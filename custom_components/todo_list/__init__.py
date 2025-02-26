@@ -10,7 +10,14 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.helpers import config_validation as cv
 
-from .const import CONF_TIME, DOMAIN
+from .const import (
+    CONF_TIME,
+    DOMAIN,
+    CONF_DISPLAY_POSITION,
+    DEFAULT_DISPLAY_POSITION,
+    CONF_DISPLAY_HOURS,
+    DEFAULT_DISPLAY_HOURS,
+)
 from .frontend import TodoListCardRegistration
 
 if TYPE_CHECKING:
@@ -44,16 +51,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Store data in hass.data
         entity_id = entry.data[CONF_ENTITY_ID]
         reset_time = entry.data[CONF_TIME]
+        display_position = entry.data.get(
+            CONF_DISPLAY_POSITION, DEFAULT_DISPLAY_POSITION
+        )
+        display_hours = entry.data.get(CONF_DISPLAY_HOURS, DEFAULT_DISPLAY_HOURS)
 
         # Register the entity directly
         from .todo_list import TodoListResetEntity
 
-        entity = TodoListResetEntity(hass, entry.entry_id, entity_id, reset_time)
+        entity = TodoListResetEntity(
+            hass, entry.entry_id, entity_id, reset_time, display_position, display_hours
+        )
 
         # Store the entity reference directly
         hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
             "entity_id": entity_id,
             "reset_time": reset_time,
+            "display_position": display_position,
+            "display_hours": display_hours,
             "entity": entity,  # Store direct reference to entity
         }
 
@@ -109,12 +124,21 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 {
                     "entity_id": new_data[CONF_ENTITY_ID],
                     "reset_time": new_data[CONF_TIME],
+                    "display_position": new_data.get(
+                        CONF_DISPLAY_POSITION, DEFAULT_DISPLAY_POSITION
+                    ),
+                    "display_hours": new_data.get(
+                        CONF_DISPLAY_HOURS, DEFAULT_DISPLAY_HOURS
+                    ),
                 }
             )
 
             # Update the entity settings
             entity.update_settings(
-                entity_id=new_data[CONF_ENTITY_ID], reset_time=new_data[CONF_TIME]
+                entity_id=new_data[CONF_ENTITY_ID],
+                reset_time=new_data[CONF_TIME],
+                display_position=new_data.get(CONF_DISPLAY_POSITION),
+                display_hours=new_data.get(CONF_DISPLAY_HOURS),
             )
         else:
             await hass.config_entries.async_reload(entry.entry_id)

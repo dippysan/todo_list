@@ -8,7 +8,7 @@ from typing import Any, cast
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 
-from .const import DOMAIN
+from .const import DOMAIN, DEFAULT_DISPLAY_HOURS, DEFAULT_DISPLAY_POSITION
 
 
 class TodoListResetEntity(Entity):
@@ -18,13 +18,21 @@ class TodoListResetEntity(Entity):
     _attr_should_poll = True
 
     def __init__(
-        self, hass: HomeAssistant, entry_id: str, source_entity_id: str, reset_time: str
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        source_entity_id: str,
+        reset_time: str,
+        display_position: str = DEFAULT_DISPLAY_POSITION,
+        display_hours: int = DEFAULT_DISPLAY_HOURS,
     ) -> None:
         """Initialize the TodoListResetEntity."""
         self.hass = hass
         self._entry_id = entry_id
         self._source_entity_id = source_entity_id
         self._reset_time = reset_time
+        self._display_position = display_position
+        self._display_hours = display_hours
 
         # Extract source name for entity_id
         source_name = source_entity_id.split(".")[-1]
@@ -57,6 +65,8 @@ class TodoListResetEntity(Entity):
         return {
             "source_entity_id": self._source_entity_id,
             "reset_time": self._reset_time,
+            "display_position": self._display_position,
+            "display_hours": self._display_hours,
         }
 
     async def async_update(self) -> None:
@@ -124,7 +134,13 @@ class TodoListResetEntity(Entity):
             self._state = "error"
             self.async_write_ha_state()
 
-    def update_settings(self, entity_id: str = None, reset_time: str = None) -> None:
+    def update_settings(
+        self,
+        entity_id: str | None = None,
+        reset_time: str | None = None,
+        display_position: str | None = None,
+        display_hours: int | None = None,
+    ) -> None:
         """Update the entity settings."""
 
         changed = False
@@ -136,6 +152,14 @@ class TodoListResetEntity(Entity):
         if reset_time is not None and reset_time != self._reset_time:
             self._reset_time = reset_time
             self._setup_timer()
+            changed = True
+
+        if display_position is not None and display_position != self._display_position:
+            self._display_position = display_position
+            changed = True
+
+        if display_hours is not None and display_hours != self._display_hours:
+            self._display_hours = display_hours
             changed = True
 
         if changed:
@@ -171,6 +195,7 @@ class TodoListResetEntity(Entity):
         import logging
         import datetime
         import time
+        from homeassistant.helpers.event import async_track_time_change  # Direct import
 
         logger = logging.getLogger(__name__)
 
@@ -197,9 +222,9 @@ class TodoListResetEntity(Entity):
                 logger.info(f"Executing scheduled reset for {self.entity_id}")
                 await self.async_reset_items()
 
-            # Schedule using time listener
-            self._timer_unsub = self.hass.helpers.event.async_track_time_change(
-                reset_callback, hour=hour, minute=minute, second=0
+            # Schedule using time listener - using the directly imported function
+            self._timer_unsub = async_track_time_change(
+                self.hass, reset_callback, hour=hour, minute=minute, second=0
             )
 
             logger.info(
