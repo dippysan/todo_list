@@ -10,8 +10,6 @@ from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN
 
-_LOGGER = logging.getLogger(__name__)
-
 
 class TodoListResetEntity(Entity):
     """Custom entity that links to a todo entity and adds reset functionality."""
@@ -45,6 +43,8 @@ class TodoListResetEntity(Entity):
 
         # Initialize state
         self._state = "idle"
+
+        self._setup_timer()
 
     @property
     def state(self) -> str:
@@ -82,12 +82,10 @@ class TodoListResetEntity(Entity):
             )
 
             if not items_response or self._source_entity_id not in items_response:
-                _LOGGER.warning("No items found for entity: %s", self._source_entity_id)
                 return []
 
             return items_response[self._source_entity_id]["items"]
         except Exception as e:
-            _LOGGER.exception("Error getting todo items: %s", str(e))
             return []
 
     async def async_reset_items(self) -> None:
@@ -123,6 +121,92 @@ class TodoListResetEntity(Entity):
 
             self.hass.async_create_task(set_active())
         except Exception as e:
-            _LOGGER.exception("Error resetting todo items: %s", str(e))
             self._state = "error"
             self.async_write_ha_state()
+
+    def update_settings(self, entity_id: str = None, reset_time: str = None) -> None:
+        """Update the entity settings."""
+
+        changed = False
+
+        if entity_id is not None and entity_id != self._source_entity_id:
+            self._source_entity_id = entity_id
+            changed = True
+
+        if reset_time is not None and reset_time != self._reset_time:
+            self._reset_time = reset_time
+            self._setup_timer()
+            changed = True
+
+        if changed:
+            # Force a state update to reflect the changes
+            self.async_schedule_update_ha_state(True)
+
+            # Update the entity registry
+            try:
+                from homeassistant.helpers.entity_registry import async_get
+
+                # Get new display name
+                source_name = self._source_entity_id.split(".")[-1]
+                display_name = source_name.replace("_", " ").title()
+                new_name = f"{display_name} With Reset"
+
+                # Update entity registry - don't change the unique_id to avoid conflicts
+                entity_registry = async_get(self.hass)
+                entity_registry.async_update_entity(
+                    self.entity_id,
+                    name=new_name,
+                )
+
+                # Also update the entity attribute
+                self._attr_name = new_name
+
+            except Exception as e:
+                logging.getLogger(__name__).error(
+                    f"Error updating entity registry: {e}"
+                )
+
+    def _setup_timer(self) -> None:
+        """Set up the timer for resetting items using Home Assistant time trigger."""
+        import logging
+        import datetime
+        import time
+
+        logger = logging.getLogger(__name__)
+
+        # Remove any existing timer
+        if hasattr(self, "_timer_unsub") and self._timer_unsub is not None:
+            self._timer_unsub()
+            self._timer_unsub = None
+
+        # If no reset time is set, don't schedule anything
+        if not self._reset_time:
+            logger.info(f"No reset time configured for {self.entity_id}")
+            return
+
+        try:
+            # Parse the reset time (expected format: "HH:MM:SS")
+            hour, minute, _second = map(int, self._reset_time.split(":"))
+
+            # Create a time object for the reset time
+            reset_time = datetime.time(hour=hour, minute=minute, second=0)
+
+            # Define the reset callback
+            async def reset_callback(now):
+                """Reset the todo items."""
+                logger.info(f"Executing scheduled reset for {self.entity_id}")
+                await self.async_reset_items()
+
+            # Schedule using time listener
+            self._timer_unsub = self.hass.helpers.event.async_track_time_change(
+                reset_callback, hour=hour, minute=minute, second=0
+            )
+
+            logger.info(
+                f"Reset timer scheduled for {hour:02d}:{minute:02d} daily for {self.entity_id}"
+            )
+
+        except (ValueError, AttributeError) as e:
+            logger.error(
+                f"Error setting up timer with reset_time '{self._reset_time}': {e}"
+            )
